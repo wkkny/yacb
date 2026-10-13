@@ -8,6 +8,7 @@ type Message = {
   id: string;
   role: Role;
   content: string;
+  thinking?: string;
 };
 
 function createId() {
@@ -31,7 +32,6 @@ export function Chat() {
   const [status, setStatus] = useState("Checking LM Studio…");
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -74,10 +74,6 @@ export function Chat() {
     };
   }, []);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, isStreaming]);
-
   async function sendMessage(event?: FormEvent) {
     event?.preventDefault();
 
@@ -99,7 +95,7 @@ export function Chat() {
 
     setMessages([
       ...history,
-      { id: assistantId, role: "assistant", content: "" },
+      { id: assistantId, role: "assistant", content: "", thinking: "" },
     ]);
     setInput("");
     setError(null);
@@ -130,6 +126,7 @@ export function Chat() {
       const decoder = new TextDecoder();
       let buffer = "";
       let assistantText = "";
+      let thinkingText = "";
 
       while (true) {
         const { done, value } = await reader.read();
@@ -148,16 +145,35 @@ export function Chat() {
 
           try {
             const parsed = JSON.parse(payload) as {
-              choices?: Array<{ delta?: { content?: string } }>;
+              choices?: Array<{
+                delta?: {
+                  content?: string;
+                  reasoning_content?: string;
+                  reasoning?: string;
+                };
+              }>;
             };
-            const delta = parsed.choices?.[0]?.delta?.content ?? "";
-            if (!delta) continue;
+            const delta = parsed.choices?.[0]?.delta;
+            const reasoning =
+              delta?.reasoning_content ?? delta?.reasoning ?? "";
+            const contentDelta = delta?.content ?? "";
 
-            assistantText += delta;
+            if (reasoning) {
+              thinkingText += reasoning;
+            }
+            if (contentDelta) {
+              assistantText += contentDelta;
+            }
+            if (!reasoning && !contentDelta) continue;
+
             setMessages((current) =>
               current.map((message) =>
                 message.id === assistantId
-                  ? { ...message, content: assistantText }
+                  ? {
+                      ...message,
+                      content: assistantText,
+                      thinking: thinkingText,
+                    }
                   : message,
               ),
             );
@@ -284,29 +300,43 @@ export function Chat() {
         ) : (
           <>
             <div className="min-h-0 flex-1 space-y-5 overflow-y-auto pt-16 pb-4 sm:pt-20">
-              {messages.map((message) => (
-                <article
-                  key={message.id}
-                  className={
-                    message.role === "user"
-                      ? "ml-auto max-w-[85%] rounded-2xl bg-[var(--user-bubble)] px-4 py-3 text-black"
-                      : "mr-auto max-w-[90%] px-1 py-1 text-black"
-                  }
-                >
-                  <p className="mb-1 text-[11px] uppercase tracking-[0.16em] text-[var(--muted)]">
-                    {message.role === "user" ? "You" : "Assistant"}
-                  </p>
-                  <p className="whitespace-pre-wrap text-[15px] leading-7">
-                    {message.content}
-                    {isStreaming &&
-                      message.role === "assistant" &&
-                      message.id === messages[messages.length - 1]?.id && (
-                        <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-black align-middle" />
-                      )}
-                  </p>
-                </article>
-              ))}
-              <div ref={bottomRef} />
+              {messages.map((message) => {
+                const isLiveAssistant =
+                  isStreaming &&
+                  message.role === "assistant" &&
+                  message.id === messages[messages.length - 1]?.id;
+                const waitingForReply =
+                  isLiveAssistant && !message.content.trim();
+
+                return (
+                  <article
+                    key={message.id}
+                    className={
+                      message.role === "user"
+                        ? "ml-auto max-w-[85%] rounded-2xl bg-[var(--user-bubble)] px-4 py-3 text-black"
+                        : "mr-auto max-w-[90%] px-1 py-1 text-black"
+                    }
+                  >
+                    <p className="mb-1 text-[11px] uppercase tracking-[0.16em] text-[var(--muted)]">
+                      {message.role === "user" ? "You" : "Assistant"}
+                    </p>
+                    {waitingForReply ? (
+                      <p className="text-xs leading-5 text-[var(--muted)] italic">
+                        {message.thinking?.trim()
+                          ? message.thinking
+                          : "Thinking…"}
+                      </p>
+                    ) : (
+                      <p className="whitespace-pre-wrap text-[15px] leading-7">
+                        {message.content}
+                        {isLiveAssistant && (
+                          <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-black align-middle" />
+                        )}
+                      </p>
+                    )}
+                  </article>
+                );
+              })}
             </div>
             {composer}
           </>
